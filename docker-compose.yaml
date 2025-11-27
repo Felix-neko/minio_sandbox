@@ -1,0 +1,89 @@
+services:
+  # Keycloak - сервер единой аутентификации (SSO)
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: keycloak
+    environment:
+      # Учетные данные администратора Keycloak
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command:
+      - start-dev  # Режим разработки (не использовать в продакшене)
+      - --import-realm  # Автоматический импорт realm из /opt/keycloak/data/import/
+    ports:
+      - "8080:8080"  # Порт для доступа к Keycloak UI
+    volumes:
+      # Монтируем realm-export.json для автоматического импорта настроек
+      - ./realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # Проверка готовности Keycloak
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - minio-keycloak-net
+
+  # MinIO - объектное хранилище, совместимое с S3
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      # Корневые учетные данные MinIO
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # Настройки OIDC для интеграции с Keycloak
+      MINIO_IDENTITY_OPENID_CONFIG_URL: "http://keycloak:8080/realms/myrealm/.well-known/openid-configuration"
+      MINIO_IDENTITY_OPENID_CLIENT_ID: "account"
+      MINIO_IDENTITY_OPENID_CLIENT_SECRET: "minio-client-secret-12345"  # Client secret из realm-export.json
+      MINIO_IDENTITY_OPENID_SCOPES: "openid,profile,email"
+      # URL для перенаправления браузера после логина
+      MINIO_BROWSER_REDIRECT_URL: "http://localhost:9001"
+      # URL сервера MinIO для консоли
+      MINIO_SERVER_URL: "http://localhost:9000"
+      # Включаем публичный доступ к бакетам (для тестов)
+      MINIO_IDENTITY_OPENID_CLAIM_NAME: "policy"
+      MINIO_IDENTITY_OPENID_CLAIM_PREFIX: ""
+    command: server /data --console-address ":9001"  # Запуск сервера с консолью на порту 9001
+    ports:
+      - "9000:9000"  # API-порт MinIO
+      - "9001:9001"  # Консоль MinIO
+    healthcheck:
+      # Проверка готовности MinIO
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - minio-keycloak-net
+
+  # Инициализатор MinIO - создает бакет и загружает тестовый файл
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Ожидание готовности MinIO...';
+      sleep 5;
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/testbucket --ignore-existing;
+      echo '{\"message\": \"Hello from MinIO!\", \"timestamp\": \"2024-01-01T00:00:00Z\"}' > /tmp/test.json;
+      mc cp /tmp/test.json myminio/testbucket/test/test.json;
+      mc anonymous set download myminio/testbucket;
+      echo 'MinIO инициализация завершена';
+      "
+    networks:
+      - minio-keycloak-net
+
+# Сеть для взаимодействия контейнеров
+networks:
+  minio-keycloak-net:
+    driver: bridge

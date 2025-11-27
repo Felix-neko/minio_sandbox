@@ -1,0 +1,45 @@
+[project]
+name = "minio-keycloak-test"
+version = "0.1.0"
+description = "Учебный проект для интеграции MinIO с Keycloak"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pytest>=8.0.0",
+    "pytest-playwright>=0.4.4",
+    "playwright>=1.40.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+# Настройки pytest
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Подробный вывод при выполнении тестов
+addopts = "-v -s --tb=short"
+# Таймаут для тестов (в секундах)
+timeout = 300
+
+[tool.black]
+# Настройки форматирования black
+line-length = 120
+target-version = ["py312"]
+skip-string-normalization = true
+
+[tool.ruff]
+# Настройки линтера ruff
+line-length = 120
+target-version = "py312"
