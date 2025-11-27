@@ -62,3 +62,4 @@ Thumbs.db
 
 # Docker volumes (не коммитим данные)
 data/
+/uv.lock

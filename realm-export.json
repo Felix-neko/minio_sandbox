@@ -132,15 +132,15 @@
         {
           "name": "policy",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
           "consentRequired": false,
           "config": {
             "userinfo.token.claim": "true",
-            "user.attribute": "policy",
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "policy",
-            "jsonType.label": "String"
+            "jsonType.label": "String",
+            "claim.value": "readwrite"
           }
         },
         {

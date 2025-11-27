@@ -1,14 +1,23 @@
 services:
   # Keycloak - сервер единой аутентификации (SSO)
   keycloak:
-    image: quay.io/keycloak/keycloak:23.0
+    image: quay.io/keycloak/keycloak:26.4
     container_name: keycloak
     environment:
       # Учетные данные администратора Keycloak
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+      # Настройка публичного URL для корректной работы OIDC-редиректов из браузера
+      # В Keycloak 26.x используем KC_HOSTNAME_URL как в рабочем проекте
+      KC_HOSTNAME_URL: http://localhost:8080
+      KC_HOSTNAME_ADMIN_URL: http://localhost:8080
+      KC_HOSTNAME_STRICT: "false"
+      # Разрешаем backchannel запросы с других хостов (для MinIO внутри Docker)
+      KC_HOSTNAME_STRICT_BACKCHANNEL: "false"
     command:
       - start-dev  # Режим разработки (не использовать в продакшене)
+      - --hostname=http://localhost:8080  # frontend URL как в рабочем проекте
+      - --hostname-backchannel-dynamic=true  # Разрешаем динамические backchannel URL
       - --import-realm  # Автоматический импорт realm из /opt/keycloak/data/import/
     ports:
       - "8080:8080"  # Порт для доступа к Keycloak UI
@@ -27,28 +36,26 @@ services:
 
   # MinIO - объектное хранилище, совместимое с S3
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
     container_name: minio
+    extra_hosts:
+      # Маппим localhost на IP хоста, чтобы MinIO мог достучаться до Keycloak по localhost:8080
+      - "localhost:host-gateway"
     environment:
-      # Корневые учетные данные MinIO
+      # Корневые учетные данные MinIO (из статьи: MINIO_ROOT_USER/PASSWORD)
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-      # Настройки OIDC для интеграции с Keycloak
-      MINIO_IDENTITY_OPENID_CONFIG_URL: "http://keycloak:8080/realms/myrealm/.well-known/openid-configuration"
-      MINIO_IDENTITY_OPENID_CLIENT_ID: "account"
-      MINIO_IDENTITY_OPENID_CLIENT_SECRET: "minio-client-secret-12345"  # Client secret из realm-export.json
-      MINIO_IDENTITY_OPENID_SCOPES: "openid,profile,email"
-      # URL для перенаправления браузера после логина
+      # URL для перенаправления браузера после логина (из статьи: MINIO_BROWSER_REDIRECT_URL)
       MINIO_BROWSER_REDIRECT_URL: "http://localhost:9001"
-      # URL сервера MinIO для консоли
+      # URL сервера MinIO для консоли (из статьи: MINIO_SERVER_URL)
       MINIO_SERVER_URL: "http://localhost:9000"
-      # Включаем публичный доступ к бакетам (для тестов)
-      MINIO_IDENTITY_OPENID_CLAIM_NAME: "policy"
-      MINIO_IDENTITY_OPENID_CLAIM_PREFIX: ""
+      # OIDC будет настроен через mc admin config в minio-init
     command: server /data --console-address ":9001"  # Запуск сервера с консолью на порту 9001
     ports:
       - "9000:9000"  # API-порт MinIO
       - "9001:9001"  # Консоль MinIO
+    volumes:
+      - minio_data:/data  # Volume для хранения данных и конфигурации MinIO
     healthcheck:
       # Проверка готовности MinIO
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
@@ -62,7 +69,7 @@ services:
     networks:
       - minio-keycloak-net
 
-  # Инициализатор MinIO - создает бакет и загружает тестовый файл
+  # Инициализатор MinIO - создание бакета и загрузка тестового файла
   minio-init:
     image: minio/mc:latest
     container_name: minio-init
@@ -71,14 +78,26 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      echo 'Ожидание готовности MinIO...';
+      echo '🔧 Ожидание готовности MinIO...';
       sleep 5;
+      
+      echo '🔗 Настройка MinIO alias...';
       mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      
+      echo '🗂️ Создание бакета testbucket...';
       mc mb myminio/testbucket --ignore-existing;
+      
+      echo '📄 Загрузка тестового файла...';
       echo '{\"message\": \"Hello from MinIO!\", \"timestamp\": \"2024-01-01T00:00:00Z\"}' > /tmp/test.json;
       mc cp /tmp/test.json myminio/testbucket/test/test.json;
-      mc anonymous set download myminio/testbucket;
-      echo 'MinIO инициализация завершена';
+      
+      echo '🔧 Настройка OIDC через mc admin config...';
+      mc admin config set myminio/ identity_openid enable=on config_url=http://keycloak:8080/realms/myrealm/.well-known/openid-configuration client_id=account client_secret=minio-client-secret-12345 scopes=openid,profile,email claim_name=policy display_name='Login with Keycloak SSO' redirect_uri_dynamic=on;
+      
+      echo '✅ MinIO инициализация завершена:';
+      echo '   - OIDC настроен через mc admin config';
+      echo '   - Бакет testbucket создан (ПРИВАТНЫЙ)';
+      echo '   - Тестовый файл загружен';
       "
     networks:
       - minio-keycloak-net
@@ -87,3 +106,8 @@ services:
 networks:
   minio-keycloak-net:
     driver: bridge
+
+# Volumes для сохранения данных и конфигурации
+volumes:
+  minio_data:
+    driver: local
